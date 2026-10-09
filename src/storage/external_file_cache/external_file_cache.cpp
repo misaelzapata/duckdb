@@ -1,3 +1,4 @@
+#line 1 "duckdb/src/storage/external_file_cache/external_file_cache.cpp"
 #include "duckdb/storage/external_file_cache/external_file_cache.hpp"
 
 #include "duckdb/common/checksum.hpp"
