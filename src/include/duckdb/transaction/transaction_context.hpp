@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/assert.hpp"
+#include "duckdb/common/atomic.hpp"
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
@@ -48,7 +49,7 @@ public:
 
 	void SetAutoCommit(bool value);
 	bool IsAutoCommit() const {
-		return auto_commit;
+		return auto_commit.load();
 	}
 
 	void SetReadOnly();
@@ -70,7 +71,8 @@ public:
 
 private:
 	ClientContext &context;
-	bool auto_commit;
+	//! Native state may be inspected by a remote control request while a query produces results.
+	atomic<bool> auto_commit;
 	TransactionInvalidationPolicy invalidation_policy = TransactionInvalidationPolicy::STANDARD_POLICY;
 	bool auto_rollback = false;
 

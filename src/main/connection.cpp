@@ -360,10 +360,23 @@ void Connection::Rollback() {
 }
 
 void Connection::SetAutoCommit(bool auto_commit) {
+	if (context->IsConnected()) {
+		if (context->RemoteIsAutoCommit() != auto_commit) {
+			if (auto_commit) {
+				Commit();
+			} else {
+				BeginTransaction();
+			}
+		}
+		return;
+	}
 	context->transaction.SetAutoCommit(auto_commit);
 }
 
 bool Connection::IsAutoCommit() {
+	if (context->IsConnected()) {
+		return context->RemoteIsAutoCommit();
+	}
 	return context->transaction.IsAutoCommit();
 }
 bool Connection::HasActiveTransaction() {

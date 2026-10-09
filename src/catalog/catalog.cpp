@@ -37,6 +37,7 @@
 #include "duckdb/main/extension_entries.hpp"
 #include "duckdb/main/extension/generated_extension_loader.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/prepared_statement.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/function/built_in_functions.hpp"
@@ -367,6 +368,22 @@ unique_ptr<TableRef> Catalog::RemoteExecute(ClientContext &context, unique_ptr<S
 
 unique_ptr<TableRef> Catalog::RemoteExecute(ClientContext &context, const string &sql) {
 	throw NotImplementedException("RemoteExecute(string) not supported by this catalog");
+}
+
+unique_ptr<TableRef> Catalog::RemoteExecute(ClientContext &context, const string &sql,
+                                          const identifier_map_t<BoundParameterData> &parameters) {
+	if (!parameters.empty()) {
+		throw NotImplementedException("Typed CONNECT parameters are not supported by this catalog");
+	}
+	return RemoteExecute(context, sql);
+}
+
+PreparedStatementInfo Catalog::RemotePrepare(ClientContext &context, SQLStatement &statement) {
+	throw NotImplementedException("CONNECT prepared statements are not supported by this catalog");
+}
+
+bool Catalog::RemoteIsAutoCommit(ClientContext &context) {
+	throw NotImplementedException("CONNECT transaction-state inspection is not supported by this catalog");
 }
 
 bool Catalog::SupportsPushdown(const ParsedExpression &expression) {

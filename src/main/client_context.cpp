@@ -246,6 +246,30 @@ void ClientContext::DisconnectFromCatalog() {
 	is_connected = false;
 }
 
+void ClientContext::CloseRemoteConnections() {
+	auto lock = LockContext();
+	for (auto &state : registered_state->States()) {
+		try {
+			state->ConnectionClosed();
+		} catch (...) {
+			// A dead peer must not prevent the native connection from closing.
+		}
+	}
+	DisconnectFromCatalog();
+}
+
+bool ClientContext::RemoteIsAutoCommit() {
+	auto lock = LockContext();
+	if (!is_connected) {
+		return transaction.IsAutoCommit();
+	}
+	auto live = TryGetConnectedCatalog();
+	if (!live) {
+		throw InvalidInputException("The connected database has been detached; DISCONNECT first");
+	}
+	return live->GetCatalog().RemoteIsAutoCommit(*this);
+}
+
 shared_ptr<AttachedDatabase> ClientContext::TryGetConnectedCatalog() const {
 	if (!is_connected) {
 		return nullptr;
@@ -855,6 +879,15 @@ unique_ptr<PreparedStatement> ClientContext::PrepareInternal(ClientContextLock &
 	auto statement_query = statement->query;
 	// prepare the statement under a generated name - the returned PreparedStatement only refers to that name
 	auto name = "duckdb_prepare_internal_" + UUID::ToString(UUID::GenerateRandomUUID());
+	if (is_connected && !IsConnectControlStatement(statement->type)) {
+		auto live = TryGetConnectedCatalog();
+		if (!live) {
+			throw InvalidInputException("The connected database has been detached; DISCONNECT first");
+		}
+		auto info = live->GetCatalog().RemotePrepare(*this, *statement);
+		return make_uniq<PreparedStatement>(shared_from_this(), std::move(name), std::move(statement_query),
+		                                    std::move(info));
+	}
 	auto prepare = make_uniq<PrepareStatement>();
 	prepare->name = Identifier(name);
 	prepare->query = statement_query;
@@ -996,29 +1029,14 @@ bool ClientContext::IsActiveResult(ClientContextLock &lock, BaseQueryResult &res
 }
 
 //! Whether this statement executes a prepared statement with parameter values supplied through the C/C++ API
-static bool HasBoundParameterValues(const SQLStatement &statement) {
-	if (statement.type != StatementType::EXECUTE_STATEMENT) {
-		return false;
-	}
-	return !statement.Cast<ExecuteStatement>().bound_values.empty();
-}
-
 unique_ptr<PendingQueryResult> ClientContext::PendingStatement(ClientContextLock &lock,
                                                                unique_ptr<SQLStatement> statement,
                                                                const PendingQueryParameters &parameters) {
+	auto local_parameters = parameters;
 	// CONNECT chokepoint: when connected, non-control SQL is rewritten in place and falls through to
 	// the normal pipeline. No recursion — the rewrite goes through PendingStatementInternal, not back here.
 	if (is_connected) {
 		if (!IsConnectControlStatement(statement->type)) {
-			// Parameterized prepared statements would need parameter substitution we don't do in v0 — reject.
-			// No-param prepared statements have a fully-resolved `query` already, route them.
-			if (HasBoundParameterValues(*statement)) {
-				return ErrorResult<PendingQueryResult>(
-				    ErrorData(InvalidInputException("Parameterized prepared statements cannot be executed while "
-				                                    "CONNECT-ed; DISCONNECT first, or run the SQL as a fresh "
-				                                    "statement to route through the CONNECT binding")),
-				    statement->query);
-			}
 			auto live = TryGetConnectedCatalog();
 			if (!live) {
 				// Target was detached elsewhere; user must explicitly DISCONNECT to clear is_connected.
@@ -1030,11 +1048,19 @@ unique_ptr<PendingQueryResult> ClientContext::PendingStatement(ClientContextLock
 			}
 			// Dispatch via the catalog — Supports(CONNECT) was validated at CONNECT time, so RemoteExecute
 			// is contracted to be implemented. Wrap the returned TableRef into a SelectStatement.
-			auto remote_ref = live->GetCatalog().RemoteExecute(*this, statement->query);
+			identifier_map_t<BoundParameterData> empty_values;
+			auto values = parameters.parameters ? parameters.parameters : &empty_values;
+			if (statement->type == StatementType::EXECUTE_STATEMENT &&
+			    !statement->Cast<ExecuteStatement>().bound_values.empty()) {
+				values = &statement->Cast<ExecuteStatement>().bound_values;
+			}
+			auto remote_ref = live->GetCatalog().RemoteExecute(*this, statement->query, *values);
 			auto rewritten = WrapAsSelect(std::move(remote_ref));
 			// the rewrite is invisible to the user - keep reporting the SQL they issued
 			rewritten->query = std::move(statement->query);
 			statement = std::move(rewritten);
+			// The server owns parameter binding; the local wrapper has no SQL placeholders.
+			local_parameters.parameters = nullptr;
 			AttachedDatabase::InvokeCloseIfLastReference(live, *this);
 			// statement is now SELECT * FROM <remote-ref>; fall through.
 		}
@@ -1056,7 +1082,7 @@ unique_ptr<PendingQueryResult> ClientContext::PendingStatement(ClientContextLock
 
 	bool invalidate_query = true;
 	try {
-		pending = PendingStatementInternal(lock, std::move(statement), parameters);
+		pending = PendingStatementInternal(lock, std::move(statement), local_parameters);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		if (!ErrorInvalidatesTransaction(error.Type())) {
@@ -1474,6 +1500,22 @@ void ClientContext::Append(TableDescription &description, ColumnDataCollection &
 }
 
 void ClientContext::InternalTryBindRelation(Relation &relation, vector<ColumnDefinition> &result_columns) {
+	if (is_connected) {
+		auto live = TryGetConnectedCatalog();
+		if (!live) {
+			throw InvalidInputException("The connected database has been detached; DISCONNECT first");
+		}
+		Parser parser(GetParserOptions());
+		parser.ParseQuery(relation.GetQuery());
+		if (parser.statements.size() != 1) {
+			throw InvalidInputException("A CONNECT-ed relation must contain exactly one statement");
+		}
+		auto info = live->GetCatalog().RemotePrepare(*this, *parser.statements[0]);
+		for (idx_t i = 0; i < info.names.size(); i++) {
+			result_columns.emplace_back(info.names[i], info.types[i]);
+		}
+		return;
+	}
 	// bind the expressions
 	auto binder = Binder::CreateBinder(*this);
 	auto result = relation.Bind(*binder);

@@ -28,6 +28,8 @@
 #include <functional>
 
 namespace duckdb {
+struct BoundParameterData;
+struct PreparedStatementInfo;
 struct AttachOptions;
 struct CreateSchemaInfo;
 struct DropInfo;
@@ -403,6 +405,13 @@ public:
 	//! Execute a full (non-query) statement remotely - the returned table ref yields the statement's result
 	virtual unique_ptr<TableRef> RemoteExecute(ClientContext &context, unique_ptr<SQLStatement> statement);
 	virtual unique_ptr<TableRef> RemoteExecute(ClientContext &context, const string &sql);
+	//! Route typed API parameters without substituting them into SQL text.
+	virtual unique_ptr<TableRef> RemoteExecute(ClientContext &context, const string &sql,
+	                                         const identifier_map_t<BoundParameterData> &parameters);
+	//! Bind a CONNECT-ed API prepared statement on its server, without executing it.
+	virtual PreparedStatementInfo RemotePrepare(ClientContext &context, SQLStatement &statement);
+	//! Inspect transaction state without replacing a currently streaming result.
+	virtual bool RemoteIsAutoCommit(ClientContext &context);
 	virtual bool SupportsPushdown(const ParsedExpression &expression);
 	virtual bool SupportsPushdown(const TableRef &ref);
 	virtual bool SupportsPushdown(const QueryNode &node);

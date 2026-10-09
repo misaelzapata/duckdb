@@ -36,6 +36,9 @@ struct BindPreparedStatementCallbackInfo {
 class ClientContextState {
 public:
 	virtual ~ClientContextState() = default;
+	//! Explicit connection close may precede destruction of contexts retained by relations.
+	virtual void ConnectionClosed() {
+	}
 	virtual void QueryBegin(ClientContext &context) {
 	}
 	virtual void QueryEnd() {

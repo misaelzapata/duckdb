@@ -122,6 +122,10 @@ public:
 	DUCKDB_API void ConnectToCatalog(const shared_ptr<AttachedDatabase> &target);
 	//! Clear any active CONNECT; subsequent SQL goes through the normal DuckDB pipeline.
 	DUCKDB_API void DisconnectFromCatalog();
+	//! Release remote sessions promptly, including those retained across DISCONNECT.
+	DUCKDB_API void CloseRemoteConnections();
+	//! Read the server's authoritative auto-commit flag without cleaning up the current query.
+	DUCKDB_API bool RemoteIsAutoCommit();
 	//! True iff a CONNECT is currently active (even if the target was detached out from under us).
 	DUCKDB_API bool IsConnected() const {
 		return is_connected;
